@@ -1,0 +1,76 @@
+[package]
+name = "printer-fw"
+version = "0.1.0"
+edition = "2021"
+authors = ["OSIX Firmware Team"]
+description = "Высокопроизводительная модульная прошивка для 3D-принтера на ESP32-S3 (OSIX Firmware)"
+license = "MIT"
+readme = "README.md"
+resolver = "2"
+rust-version = "1.77"
+
+[[bin]]
+name = "printer-fw"
+path = "src/main.rs"
+harness = false
+
+# --------------------------------------------------------------------------
+# Профили сборки
+# --------------------------------------------------------------------------
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+overflow-checks = false
+debug = false
+
+[profile.dev]
+opt-level = "z"
+debug = true
+overflow-checks = true
+
+# --------------------------------------------------------------------------
+# Зависимости
+# --------------------------------------------------------------------------
+
+[dependencies]
+# Низкоуровневые биндинги ESP-IDF (обязательны для esp-idf-hal/svc)
+esp-idf-sys = { version = "0.35", features = ["binstart"] }
+
+# HAL поверх ESP-IDF (GPIO, UART, SPI, I2C, RMT, LEDC, таймеры и т.д.)
+esp-idf-hal = { version = "0.44" }
+
+# Сервисы ESP-IDF: Wi-Fi, HTTP, NVS, логирование, watchdog, systime
+esp-idf-svc = { version = "0.49", default-features = false, features = [
+    "std",
+    "binstart",
+] }
+
+# Универсальные HAL-трейты (используются в drivers::motor::MotorDriver и т.п.)
+embedded-hal = "1.0"
+embedded-hal-nb = "1.0"
+
+# Ошибки и логирование
+anyhow = "1.0"
+thiserror = "1.0"
+log = { version = "0.4", default-features = false }
+
+# Сериализация конфигурации
+serde = { version = "1.0", features = ["derive"] }
+toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
+
+[build-dependencies]
+embuild = "0.32"
+
+[features]
+default = []
+
+# --------------------------------------------------------------------------
+# Метаданные, необходимые embuild/esp-idf-sys для сборки под ESP-IDF
+# --------------------------------------------------------------------------
+
+[package.metadata.esp-idf-sys]
+esp_idf_tools_install_dir = "global"
+esp_idf_sdkconfig = "sdkconfig.defaults"
