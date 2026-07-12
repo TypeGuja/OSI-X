@@ -1,0 +1,20 @@
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+rustflags = [
+    "--cfg", "espidf_time64",
+]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+build-std-features = ["panic_immediate_abort"]
+
+[env]
+# Версия ESP-IDF, с которой собирается проект.
+ESP_IDF_VERSION = { value = "v5.2.1" }
+# Ускоряет повторные сборки embuild за счёт кеша инструментов.
+ESP_IDF_TOOLS_INSTALL_DIR = { value = "global" }
+MCU = { value = "esp32s3" }
