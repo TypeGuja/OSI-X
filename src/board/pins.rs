@@ -96,6 +96,23 @@ pub struct SdCardPins {
     pub card_detect: GpioNum,
 }
 
+/// Пины подсистемы температуры (термисторы на ADC1, нагреватели/вентилятор
+/// на ШИМ через LEDC).
+#[derive(Debug, Clone, Copy)]
+pub struct TemperaturePins {
+    /// Номер канала ADC1, к которому подключён термистор хотэнда
+    /// (`GPIO2` = `ADC1_CH1` на ESP32-S3).
+    pub hotend_thermistor_adc_channel: u8,
+    /// Номер канала ADC1 термистора стола (`GPIO3` = `ADC1_CH2`).
+    pub bed_thermistor_adc_channel: u8,
+    /// Пин ШИМ нагревателя хотэнда (через MOSFET).
+    pub hotend_heater_pwm: GpioNum,
+    /// Пин ШИМ нагревателя стола (через MOSFET).
+    pub bed_heater_pwm: GpioNum,
+    /// Пин ШИМ вентилятора обдува детали.
+    pub part_fan_pwm: GpioNum,
+}
+
 /// Полная карта пинов платы OSIX (ESP32-S3 N16R8).
 #[derive(Debug, Clone, Copy)]
 pub struct PinMap {
@@ -111,6 +128,8 @@ pub struct PinMap {
     pub system: SystemPins,
     /// Пины SD-карты.
     pub sd_card: SdCardPins,
+    /// Пины подсистемы температуры.
+    pub temperature: TemperaturePins,
 }
 
 impl PinMap {
@@ -156,6 +175,13 @@ impl PinMap {
             sclk: 36,
             cs: 34,
             card_detect: 33,
+        },
+        temperature: TemperaturePins {
+            hotend_thermistor_adc_channel: 1, // GPIO2 = ADC1_CH1
+            bed_thermistor_adc_channel: 2,    // GPIO3 = ADC1_CH2
+            hotend_heater_pwm: 39,
+            bed_heater_pwm: 40,
+            part_fan_pwm: 41,
         },
     };
 }
