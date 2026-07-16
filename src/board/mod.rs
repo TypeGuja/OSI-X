@@ -18,6 +18,8 @@ pub mod rgb;
 pub mod watchdog;
 
 use crate::error::AppResult;
+use esp_idf_hal::adc::ADC1;
+use esp_idf_hal::ledc::LEDC;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::spi::SPI2;
 use esp_idf_hal::uart::{UART1, UART2};
@@ -53,6 +55,10 @@ pub struct Board<'d> {
     pub uart2: UART2,
     /// Периферия SPI2, зарезервированная под SD-карту.
     pub spi2: SPI2,
+    /// Периферия LEDC (ШИМ), зарезервированная под нагреватели и вентилятор.
+    pub ledc: LEDC,
+    /// Периферия ADC1, зарезервированная под термисторы.
+    pub adc1: ADC1,
 }
 
 impl<'d> Board<'d> {
@@ -95,6 +101,8 @@ impl<'d> Board<'d> {
             uart1: peripherals.uart1,
             uart2: peripherals.uart2,
             spi2: peripherals.spi2,
+            ledc: peripherals.ledc,
+            adc1: peripherals.adc1,
         })
     }
 }
