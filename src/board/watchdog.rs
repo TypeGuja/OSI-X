@@ -31,9 +31,15 @@ impl Watchdog {
         };
 
         // SAFETY: `config` создан здесь и живёт на стеке до завершения вызова;
-        // `esp_task_wdt_init` не сохраняет указатель после возврата (согласно
-        // документации ESP-IDF), поэтому передача `&config` безопасна.
-        let ret = unsafe { esp_idf_sys::esp_task_wdt_init(&config) };
+        // `esp_task_wdt_init`/`esp_task_wdt_reconfigure` не сохраняют
+        // указатель после возврата (согласно документации ESP-IDF), поэтому
+        // передача `&config` безопасна.
+        let mut ret = unsafe { esp_idf_sys::esp_task_wdt_init(&config) };
+        if ret == esp_idf_sys::ESP_ERR_INVALID_STATE as i32 {
+            // ESP-IDF уже запустил TWDT при старте (`CONFIG_ESP_TASK_WDT_INIT`,
+            // включено по умолчанию) — применяем наши параметры к нему.
+            ret = unsafe { esp_idf_sys::esp_task_wdt_reconfigure(&config) };
+        }
         EspError::convert(ret)
             .map_err(|e| AppError::board(format!("не удалось инициализировать TWDT: {e}")))?;
 
