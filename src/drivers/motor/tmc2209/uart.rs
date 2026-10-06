@@ -50,6 +50,29 @@ fn crc8(data: &[u8]) -> u8 {
     crc
 }
 
+/// Описывает принятые байты относительно отправленного запроса.
+fn describe_rx(request: &[u8], received: &[u8]) -> String {
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
+    if received.is_empty() {
+        format!(
+            "на RX не пришло ни одного байта, даже эха запроса [{}]: RX не соединён с линией TX/PDN_UART",
+            hex(request)
+        )
+    } else if received.starts_with(request) {
+        format!(
+            "на RX пришло только эхо запроса [{}] (всего: [{}]): линия исправна, драйвер не отвечает",
+            hex(request),
+            hex(received)
+        )
+    } else {
+        format!(
+            "на RX пришли байты [{}] вместо эха [{}]: помехи, неверная скорость или нет общей земли",
+            hex(received),
+            hex(request)
+        )
+    }
+}
+
 /// Однопроводный UART-канал к одному драйверу TMC2209.
 ///
 /// Логика приёма повторяет `TMC2208Stepper::_sendDatagram` из Arduino-библиотеки
@@ -143,13 +166,19 @@ impl<'d> Tmc2209Uart<'d> {
         // (0..=3), а не 0xFF.
         let target = (u32::from(SYNC_BYTE) << 16) | (u32::from(MASTER_ADDRESS) << 8) | u32::from(register);
         let mut window: u32 = 0;
+        // Всё, что пришло на RX до заголовка ответа, — для диагностики:
+        // эхо запроса без ответа означает, что линия RX/TX исправна, а
+        // молчит сам драйвер; пустой приём — что RX не видит линию TX.
+        let mut received: Vec<u8> = Vec::with_capacity(16);
         while window != target {
-            let byte = self.read_byte(deadline).ok_or_else(|| {
-                AppError::HardwareTimeout(format!(
-                    "TMC2209 (адрес {}) не ответил на чтение регистра {register:#04x}",
-                    self.slave_address
-                ))
-            })?;
+            let Some(byte) = self.read_byte(deadline) else {
+                return Err(AppError::HardwareTimeout(format!(
+                    "TMC2209 (адрес {}) не ответил на чтение регистра {register:#04x}; {}",
+                    self.slave_address,
+                    describe_rx(&request, &received)
+                )));
+            };
+            received.push(byte);
             window = ((window << 8) | u32::from(byte)) & 0x00FF_FFFF;
         }
 

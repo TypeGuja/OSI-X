@@ -169,7 +169,10 @@ where
                     }
                     return Ok(());
                 }
-                Err(e) => last_error = Some(e),
+                Err(e) => {
+                    log::warn!("TMC2209: адрес {candidate}: {e}");
+                    last_error = Some(e);
+                }
             }
         }
 
