@@ -5,7 +5,6 @@
 //! переменные окружения ESP-IDF (`sdkconfig`, компоненты и т.д.)
 //! в `esp-idf-sys`.
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     embuild::espidf::sysenv::output();
-    Ok(())
 }
