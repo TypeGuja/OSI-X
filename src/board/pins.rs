@@ -146,23 +146,28 @@ impl PinMap {
             endstop: 7,
         },
         axis_y: AxisYPins {
-            step: 15,
-            dir: 16,
+            // 15/16 заняты UART оси X — перенесено на освободившиеся 13/14.
+            // TODO: сверить с реальной разводкой STEP/DIR оси Y.
+            step: 13,
+            dir: 14,
             enable: 17,
             endstop: 18,
         },
         axis_z: AxisZPins {
             in1: 8,
             in2: 9,
-            in3: 10,
-            in4: 11,
+            // 10/11 заняты UART оси Y — перенесено на освободившиеся 21/47.
+            // TODO: сверить с реальной разводкой IN3/IN4 ULN2003.
+            in3: 21,
+            in4: 47,
             endstop: 12,
         },
+        // Пины UART подтверждены рабочим Arduino-скетчем (TMCStepper).
         tmc_uart: TmcUartPins {
-            x_tx: 13,
-            x_rx: 14,
-            y_tx: 21,
-            y_rx: 47,
+            x_tx: 15,
+            x_rx: 16,
+            y_tx: 11,
+            y_rx: 10,
         },
         system: SystemPins {
             psu_enable: 38,
