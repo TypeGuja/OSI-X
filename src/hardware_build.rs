@@ -121,6 +121,49 @@ fn pulled_up_input_pin(gpio: u8) -> AppResult<PinDriver<'static, AnyIOPin, Input
     Ok(driver)
 }
 
+/// Проверяет на уровне GPIO, что линия TX физически доходит до RX (через
+/// резистор/PDN_UART драйвера), до передачи пинов UART-драйверу.
+///
+/// RX подтягивается к земле при TX = 1 и к питанию при TX = 0: если RX
+/// оба раза повторяет TX, пины соединены; иначе RX "висит" на подтяжке.
+/// Результат только логируется — решение принимает инициализация драйвера.
+fn log_uart_line_check(axis: &str, tx: u8, rx: u8) {
+    use esp_idf_sys as sys;
+    let (tx, rx) = (i32::from(tx), i32::from(rx));
+    // SAFETY: пины ещё не переданы ни одному драйверу (UART настроит их
+    // заново через `uart_set_pin`), вызовы не сохраняют указателей.
+    let (high_seen, low_seen) = unsafe {
+        sys::gpio_reset_pin(tx);
+        sys::gpio_reset_pin(rx);
+        sys::gpio_set_direction(tx, sys::gpio_mode_t_GPIO_MODE_INPUT_OUTPUT);
+        sys::gpio_set_direction(rx, sys::gpio_mode_t_GPIO_MODE_INPUT);
+
+        sys::gpio_set_pull_mode(rx, sys::gpio_pull_mode_t_GPIO_PULLDOWN_ONLY);
+        sys::gpio_set_level(tx as _, 1);
+        sys::esp_rom_delay_us(200);
+        let high_seen = sys::gpio_get_level(rx) == 1;
+
+        sys::gpio_set_pull_mode(rx, sys::gpio_pull_mode_t_GPIO_PULLUP_ONLY);
+        sys::gpio_set_level(tx as _, 0);
+        sys::esp_rom_delay_us(200);
+        let low_seen = sys::gpio_get_level(rx) == 0;
+
+        sys::gpio_set_level(tx as _, 1);
+        (high_seen, low_seen)
+    };
+
+    if high_seen && low_seen {
+        log::info!("TMC2209 {axis}: линия TX GPIO{tx} -> RX GPIO{rx} соединена (проверка GPIO)");
+    } else {
+        log::error!(
+            "TMC2209 {axis}: RX GPIO{rx} не повторяет TX GPIO{tx} (TX=1 -> RX {}, TX=0 -> RX {}): \
+             пины физически не соединены или подключены к другим GPIO",
+            if high_seen { "1" } else { "0" },
+            if low_seen { "0" } else { "1" },
+        );
+    }
+}
+
 /// Создаёт три оси (`X`, `Y` — TMC2209 по UART; `Z` — ULN2003) в виде
 /// объектно-безопасных [`AxisControl`], готовых для [`StepGenerator`].
 ///
@@ -132,6 +175,9 @@ fn build_axes(
     uart2: esp_idf_hal::uart::UART2,
 ) -> AppResult<[Box<dyn AxisControl>; 3]> {
     let uart_config = UartConfig::new().baudrate(Hertz(115_200));
+
+    log_uart_line_check("X", pins.tmc_uart.x_tx, pins.tmc_uart.x_rx);
+    log_uart_line_check("Y", pins.tmc_uart.y_tx, pins.tmc_uart.y_rx);
 
     // --- Ось X: TMC2209 по UART1 -----------------------------------
     let x_tx = unsafe { AnyOutputPin::new(i32::from(pins.tmc_uart.x_tx)) };
