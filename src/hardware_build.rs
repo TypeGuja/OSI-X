@@ -227,7 +227,7 @@ fn build_temperature_controller(
     // систем, а не утечка в обычном смысле (память не может быть
     // переиспользована в любом случае, пока включён контроллер).
     let timer_config = TimerConfig::new().frequency(Hertz(HEATER_PWM_FREQUENCY_HZ));
-    let timer: &'static LedcTimerDriver<'static> = Box::leak(Box::new(
+    let timer: &'static LedcTimerDriver<'static, esp_idf_hal::ledc::TIMER0> = Box::leak(Box::new(
         LedcTimerDriver::new(ledc.timer0, &timer_config)
             .map_err(|e| AppError::board(format!("не удалось настроить таймер LEDC: {e}")))?,
     ));

@@ -57,12 +57,12 @@ where
 
     fn set_pin(&mut self, index: u8, high: bool) -> AppResult<()> {
         let result = match index {
-            0 => set_state(&mut self.in1, high),
-            1 => set_state(&mut self.in2, high),
-            2 => set_state(&mut self.in3, high),
-            _ => set_state(&mut self.in4, high),
+            0 => set_state(&mut self.in1, high).map_err(|e| format!("{e:?}")),
+            1 => set_state(&mut self.in2, high).map_err(|e| format!("{e:?}")),
+            2 => set_state(&mut self.in3, high).map_err(|e| format!("{e:?}")),
+            _ => set_state(&mut self.in4, high).map_err(|e| format!("{e:?}")),
         };
-        result.map_err(|e| AppError::motor_driver("uln2003", format!("IN{}: {e:?}", index + 1)))
+        result.map_err(|e| AppError::motor_driver("uln2003", format!("IN{}: {e}", index + 1)))
     }
 }
 

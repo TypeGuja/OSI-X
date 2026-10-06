@@ -13,7 +13,7 @@ pub mod wifi;
 use crate::config::network::OtaConfig;
 use crate::error::{AppError, AppResult};
 use esp_idf_svc::ota::EspOta;
-use std::io::Write;
+use esp_idf_svc::io::Write;
 
 /// Версия прошивки, известная на этапе компиляции (совпадает с версией,
 /// сообщаемой `http::VersionInfo` и `M115`).
@@ -90,7 +90,13 @@ impl OtaUpdater {
             ));
         }
 
-        let mut ota = EspOta::new().map_err(|e| AppError::Network(format!("не удалось получить доступ к OTA: {e}")))?;
+        // `EspOtaUpdate` заимствует `EspOta`, а сессия должна пережить этот
+        // вызов, поэтому `EspOta` (синглтон ESP-IDF) живёт до перезагрузки.
+        // Успешное обновление всё равно заканчивается перезагрузкой; после
+        // прерванного обновления повторная попытка вернёт ошибку до рестарта.
+        let ota: &'static mut EspOta = Box::leak(Box::new(
+            EspOta::new().map_err(|e| AppError::Network(format!("не удалось получить доступ к OTA: {e}")))?,
+        ));
         let update = ota
             .initiate_update()
             .map_err(|e| AppError::Network(format!("не удалось начать OTA-обновление: {e}")))?;

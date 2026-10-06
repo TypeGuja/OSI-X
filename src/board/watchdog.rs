@@ -26,7 +26,7 @@ impl Watchdog {
     pub fn init(timeout_s: u32) -> AppResult<Self> {
         let config = esp_idf_sys::esp_task_wdt_config_t {
             timeout_ms: timeout_s.saturating_mul(1000),
-            idle_core_mask: (1 << esp_idf_sys::CONFIG_FREERTOS_NUMBER_OF_CORES) - 1,
+            idle_core_mask: (1 << esp_idf_sys::portNUM_PROCESSORS) - 1,
             trigger_panic: true,
         };
 

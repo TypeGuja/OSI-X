@@ -12,7 +12,7 @@ use crate::error::{AppError, AppResult};
 use esp_idf_svc::http::server::{Configuration as HttpServerConfiguration, EspHttpServer};
 use esp_idf_svc::http::Method;
 use serde::Serialize;
-use std::io::Write;
+use esp_idf_svc::io::Write;
 
 /// Версия прошивки, сообщаемая `/api/version` (совпадает по духу с `M115`
 /// в `gcode::commands::system`, но в машиночитаемом JSON-формате для

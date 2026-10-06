@@ -7,17 +7,16 @@ use std::time::Duration;
 /// Текущая тактовая частота CPU, МГц.
 #[must_use]
 pub fn cpu_frequency_mhz() -> u32 {
-    // SAFETY: `esp_clk_cpu_freq` не принимает аргументов и не имеет
-    // предусловий — просто читает уже проинициализированное значение
-    // тактового генератора.
-    let hz = unsafe { esp_idf_sys::esp_clk_cpu_freq() };
-    (hz / 1_000_000) as u32
+    // SAFETY: ROM-функция без аргументов и предусловий — возвращает уже
+    // установленную частоту CPU в МГц (`esp_clk_cpu_freq` из
+    // `esp_private/esp_clk.h` в биндинги не попадает).
+    unsafe { esp_idf_sys::ets_get_cpu_frequency() }
 }
 
 /// Число ядер CPU, доступных FreeRTOS (`2` для ESP32-S3).
 #[must_use]
 pub const fn core_count() -> u32 {
-    esp_idf_sys::CONFIG_FREERTOS_NUMBER_OF_CORES
+    esp_idf_sys::portNUM_PROCESSORS
 }
 
 /// Время работы станка с момента включения.

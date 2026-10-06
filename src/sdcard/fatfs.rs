@@ -41,6 +41,10 @@ use std::mem::MaybeUninit;
 /// монтирующей карту один раз при старте и не размонтирующей её в штатной
 /// работе, это не является проблемой; если размонтирование потребуется
 /// чаще, поле нужно дозаполнить по сверке с реальными биндингами.
+/// `SDMMC_HOST_FLAG_SPI` из `sdmmc_host.h` (`BIT(3)`): макрос через `BIT()`
+/// bindgen не разворачивает, поэтому значение продублировано здесь.
+const SDMMC_HOST_FLAG_SPI: u32 = 1 << 3;
+
 fn spi_host_config(host_id: u32) -> esp_idf_sys::sdmmc_host_t {
     // SAFETY: `sdmmc_host_t` — POD-структура (числа и указатели на функции,
     // без деструкторов и инвариантов, требующих инициализации кроме тех,
@@ -49,7 +53,7 @@ fn spi_host_config(host_id: u32) -> esp_idf_sys::sdmmc_host_t {
     // значение и в оригинальном `SDSPI_HOST_DEFAULT()` для режима SPI.
     let mut host: esp_idf_sys::sdmmc_host_t = unsafe { MaybeUninit::zeroed().assume_init() };
 
-    host.flags = esp_idf_sys::SDMMC_HOST_FLAG_SPI;
+    host.flags = SDMMC_HOST_FLAG_SPI;
     host.slot = host_id as i32;
     host.max_freq_khz = esp_idf_sys::SDMMC_FREQ_DEFAULT as i32;
     host.io_voltage = 3.3;
@@ -89,11 +93,11 @@ impl MountedCard {
         // `esp_vfs_fat_mount_config_t` (оба содержат только числа/булевы
         // флаги без указателей, требующих инициализации).
         let mut slot_config: esp_idf_sys::sdspi_device_config_t = unsafe { MaybeUninit::zeroed().assume_init() };
-        slot_config.host_id = super::spi::SD_SPI_HOST as i32;
+        slot_config.host_id = super::spi::SD_SPI_HOST;
         slot_config.gpio_cs = i32::from(cs_pin);
-        slot_config.gpio_cd = esp_idf_sys::SDSPI_SLOT_NO_CD;
-        slot_config.gpio_wp = esp_idf_sys::SDSPI_SLOT_NO_WP;
-        slot_config.gpio_int = esp_idf_sys::SDSPI_SLOT_NO_INT;
+        slot_config.gpio_cd = esp_idf_sys::gpio_num_t_GPIO_NUM_NC;
+        slot_config.gpio_wp = esp_idf_sys::gpio_num_t_GPIO_NUM_NC;
+        slot_config.gpio_int = esp_idf_sys::gpio_num_t_GPIO_NUM_NC;
         slot_config.gpio_wp_polarity = false;
 
         let mut mount_config: esp_idf_sys::esp_vfs_fat_mount_config_t = unsafe { MaybeUninit::zeroed().assume_init() };
