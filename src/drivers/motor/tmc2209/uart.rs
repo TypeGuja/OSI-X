@@ -2,8 +2,8 @@
 //!
 //! TMC2209 использует полудуплексный однопроводный UART (`PDN_UART`): линии
 //! TX и RX платы соединены вместе через резистор с одним выводом драйвера,
-//! поэтому каждый переданный байт эхом возвращается обратно в приёмник ESP32
-//! и должен быть отброшен перед чтением фактического ответа драйвера.
+//! поэтому каждый переданный байт эхом возвращается обратно в приёмник ESP32.
+//! Эхо не используется как подтверждение: оно просто отбрасывается.
 //!
 //! Формат датаграммы записи (8 байт): `[SYNC, ADDR, REG|WRITE, D3, D2, D1, D0, CRC]`.
 //! Формат запроса чтения (4 байта): `[SYNC, ADDR, REG, CRC]`.
@@ -14,7 +14,7 @@
 
 use crate::error::{AppError, AppResult};
 use esp_idf_hal::uart::UartDriver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Байт синхронизации, с которого начинается любая датаграмма.
 const SYNC_BYTE: u8 = 0x05;
@@ -22,8 +22,16 @@ const SYNC_BYTE: u8 = 0x05;
 const WRITE_FLAG: u8 = 0x80;
 /// Адрес, которым драйвер помечает свои ответные датаграммы (роль "мастера").
 const MASTER_ADDRESS: u8 = 0xFF;
-/// Таймаут ожидания ответа драйвера.
+/// Общий таймаут ожидания ответа драйвера на запрос чтения (эхо запроса +
+/// `SENDDELAY` + 8 байт ответа на 115200 бод укладываются в ~1.5 мс).
 const REPLY_TIMEOUT: Duration = Duration::from_millis(20);
+/// Таймаут ожидания физического окончания передачи датаграммы, тиков FreeRTOS.
+const TX_DONE_TIMEOUT_TICKS: u32 = 20;
+/// Пауза после записи, за которую успевает вернуться эхо (аналог
+/// `replyDelay` в TMCStepper), мс.
+const ECHO_SETTLE_MS: u32 = 2;
+/// Количество попыток чтения регистра при сбое приёма.
+const READ_ATTEMPTS: usize = 3;
 
 /// Вычисляет CRC8 датаграммы TMC2209 (полином `0x07`, младший бит вперёд).
 ///
@@ -43,6 +51,13 @@ fn crc8(data: &[u8]) -> u8 {
 }
 
 /// Однопроводный UART-канал к одному драйверу TMC2209.
+///
+/// Логика приёма повторяет `TMC2208Stepper::_sendDatagram` из Arduino-библиотеки
+/// TMCStepper: перед каждой транзакцией приёмный буфер очищается, запись не
+/// требует эха, а ответ на чтение ищется по заголовку `[SYNC, 0xFF, REG]` в
+/// потоке байт. Поэтому канал работает одинаково и при наличии эха (TX и RX
+/// соединены на линии `PDN_UART`), и без него, и не сбивается из-за мусорного
+/// байта в буфере (например, после подачи питания на драйвер).
 pub struct Tmc2209Uart<'d> {
     uart: UartDriver<'d>,
     slave_address: u8,
@@ -60,7 +75,22 @@ impl<'d> Tmc2209Uart<'d> {
         Self { uart, slave_address }
     }
 
+    /// Текущий адрес драйвера на шине.
+    #[must_use]
+    pub fn slave_address(&self) -> u8 {
+        self.slave_address
+    }
+
+    /// Меняет адрес, по которому идут запросы (используется при поиске
+    /// драйвера на шине, если `MS1`/`MS2` распаяны не так, как ожидалось).
+    pub fn set_slave_address(&mut self, slave_address: u8) {
+        self.slave_address = slave_address;
+    }
+
     /// Записывает 32-битное значение в регистр драйвера.
+    ///
+    /// TMC2209 не отвечает на запись, поэтому факт приёма можно проверить
+    /// только по счётчику `IFCNT` (см. `Tmc2209Driver`).
     pub fn write_register(&mut self, register: u8, value: u32) -> AppResult<()> {
         let mut datagram = [0u8; 8];
         datagram[0] = SYNC_BYTE;
@@ -72,39 +102,72 @@ impl<'d> Tmc2209Uart<'d> {
         datagram[6] = value as u8;
         datagram[7] = crc8(&datagram[..7]);
 
-        self.write_bytes(&datagram)?;
-        self.discard_echo(datagram.len())?;
-        Ok(())
+        self.clear_rx()?;
+        self.send(&datagram)?;
+        // Дать эху вернуться и выбросить его, чтобы оно не попало в
+        // следующую транзакцию.
+        esp_idf_hal::delay::FreeRtos::delay_ms(ECHO_SETTLE_MS);
+        self.clear_rx()
     }
 
-    /// Читает 32-битное значение из регистра драйвера.
+    /// Читает 32-битное значение из регистра драйвера (с повторами).
     pub fn read_register(&mut self, register: u8) -> AppResult<u32> {
+        let mut last_error = None;
+        for _ in 0..READ_ATTEMPTS {
+            match self.read_register_once(register) {
+                Ok(value) => return Ok(value),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            AppError::HardwareTimeout("TMC2209 не ответил на UART-запрос".to_string())
+        }))
+    }
+
+    /// Одна попытка чтения регистра.
+    fn read_register_once(&mut self, register: u8) -> AppResult<u32> {
+        let register = register & !WRITE_FLAG;
         let mut request = [0u8; 4];
         request[0] = SYNC_BYTE;
         request[1] = self.slave_address;
-        request[2] = register & !WRITE_FLAG;
+        request[2] = register;
         request[3] = crc8(&request[..3]);
 
-        self.write_bytes(&request)?;
-        self.discard_echo(request.len())?;
+        self.clear_rx()?;
+        self.send(&request)?;
+
+        let deadline = Instant::now() + REPLY_TIMEOUT;
+
+        // Поиск заголовка ответа в потоке: эхо запроса (`05 AA RR CRC`) не
+        // может совпасть с ним, так как у эха второй байт — адрес драйвера
+        // (0..=3), а не 0xFF.
+        let target = (u32::from(SYNC_BYTE) << 16) | (u32::from(MASTER_ADDRESS) << 8) | u32::from(register);
+        let mut window: u32 = 0;
+        while window != target {
+            let byte = self.read_byte(deadline).ok_or_else(|| {
+                AppError::HardwareTimeout(format!(
+                    "TMC2209 (адрес {}) не ответил на чтение регистра {register:#04x}",
+                    self.slave_address
+                ))
+            })?;
+            window = ((window << 8) | u32::from(byte)) & 0x00FF_FFFF;
+        }
 
         let mut reply = [0u8; 8];
-        self.read_exact(&mut reply)?;
+        reply[0] = SYNC_BYTE;
+        reply[1] = MASTER_ADDRESS;
+        reply[2] = register;
+        for slot in reply.iter_mut().skip(3) {
+            *slot = self.read_byte(deadline).ok_or_else(|| {
+                AppError::HardwareTimeout("TMC2209 оборвал ответ на UART-запрос".to_string())
+            })?;
+        }
 
         let expected_crc = crc8(&reply[..7]);
         if reply[7] != expected_crc {
             return Err(AppError::motor_driver(
                 "tmc2209-uart",
                 format!("неверная контрольная сумма ответа (ожидалось {expected_crc:#04x}, получено {:#04x})", reply[7]),
-            ));
-        }
-        if reply[0] != SYNC_BYTE || reply[1] != MASTER_ADDRESS || reply[2] != register {
-            return Err(AppError::motor_driver(
-                "tmc2209-uart",
-                format!(
-                    "неожиданный заголовок ответа: sync={:#04x} addr={:#04x} reg={:#04x}",
-                    reply[0], reply[1], reply[2]
-                ),
             ));
         }
 
@@ -115,38 +178,42 @@ impl<'d> Tmc2209Uart<'d> {
         Ok(value)
     }
 
-    /// Отправляет сырые байты в UART.
-    fn write_bytes(&mut self, bytes: &[u8]) -> AppResult<()> {
-        self.uart
-            .write(bytes)
-            .map_err(|e| AppError::motor_driver("tmc2209-uart", format!("ошибка передачи: {e}")))?;
-        Ok(())
-    }
-
-    /// Считывает и отбрасывает `len` байт собственного эха, возникающего из-за
-    /// однопроводной топологии линии `PDN_UART`.
-    fn discard_echo(&mut self, len: usize) -> AppResult<()> {
-        let mut echo = [0u8; 8];
-        debug_assert!(len <= echo.len(), "буфер эха меньше датаграммы");
-        self.read_exact(&mut echo[..len])
-    }
-
-    /// Считывает ровно `buf.len()` байт, ожидая их с таймаутом.
-    fn read_exact(&mut self, buf: &mut [u8]) -> AppResult<()> {
-        let mut received = 0usize;
-        while received < buf.len() {
-            let count = self
+    /// Отправляет датаграмму и ждёт, пока она физически уйдёт в линию.
+    fn send(&mut self, bytes: &[u8]) -> AppResult<()> {
+        let mut written = 0usize;
+        while written < bytes.len() {
+            written += self
                 .uart
-                .read(&mut buf[received..], REPLY_TIMEOUT.as_millis() as u32)
-                .map_err(|e| AppError::motor_driver("tmc2209-uart", format!("ошибка приёма: {e}")))?;
-            if count == 0 {
-                return Err(AppError::HardwareTimeout(
-                    "TMC2209 не ответил на UART-запрос вовремя".to_string(),
-                ));
-            }
-            received += count;
+                .write(&bytes[written..])
+                .map_err(|e| AppError::motor_driver("tmc2209-uart", format!("ошибка передачи: {e}")))?;
         }
-        Ok(())
+        self.uart
+            .wait_tx_done(TX_DONE_TIMEOUT_TICKS)
+            .map_err(|e| AppError::motor_driver("tmc2209-uart", format!("передача не завершилась: {e}")))
+    }
+
+    /// Очищает приёмный буфер UART (эхо и мусор от прошлых транзакций).
+    fn clear_rx(&mut self) -> AppResult<()> {
+        self.uart
+            .clear_rx()
+            .map_err(|e| AppError::motor_driver("tmc2209-uart", format!("ошибка очистки RX: {e}")))
+    }
+
+    /// Читает один байт, ожидая его не дольше `deadline`.
+    fn read_byte(&mut self, deadline: Instant) -> Option<u8> {
+        let mut byte = [0u8; 1];
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let ticks = ((deadline - now).as_millis() as u32).max(1);
+            match self.uart.read(&mut byte, ticks) {
+                Ok(1) => return Some(byte[0]),
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        }
     }
 }
 

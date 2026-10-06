@@ -16,6 +16,10 @@ const VFS_LOW_SENSITIVITY: f32 = 0.325;
 /// Опорное напряжение полной шкалы при `VSENSE = 1` (повышенная
 /// чувствительность, используется для малых токов).
 const VFS_HIGH_SENSITIVITY: f32 = 0.180;
+/// Значение поля `VERSION` (биты 24..31 регистра `IOIN`) у TMC2209.
+const TMC2209_VERSION: u8 = 0x21;
+/// Максимальный адрес драйвера, задаваемый пинами `MS1`/`MS2`.
+const MAX_SLAVE_ADDRESS: u8 = 3;
 
 /// Параметры силовой части, необходимые для перевода миллиампер в шкалу
 /// тока (`CS`, current scale) регистра `IHOLD_IRUN`.
@@ -33,6 +37,9 @@ impl Default for CurrentSenseConfig {
         }
     }
 }
+
+/// Количество записей регистров в [`Tmc2209Driver::init`] (сверяется с `IFCNT`).
+const INIT_WRITES: u32 = 5;
 
 /// Драйвер двигателя оси на базе TMC2209 в режиме STEP/DIR.
 ///
@@ -72,7 +79,7 @@ where
     /// `enable_pin` управляется активным низким уровнем — таково поведение
     /// вывода `ENN` на всех распространённых модулях TMC2209.
     pub fn init(
-        uart: Tmc2209Uart<'u>,
+        mut uart: Tmc2209Uart<'u>,
         step_pin: STEP,
         dir_pin: DIR,
         mut enable_pin: EN,
@@ -81,6 +88,9 @@ where
         enable_pin
             .set_high() // неактивно (выключено) при активном низком уровне
             .map_err(|e| AppError::motor_driver("tmc2209", format!("ENABLE pin: {e:?}")))?;
+
+        Self::detect(&mut uart)?;
+        let ifcnt_before = uart.read_register(address::IFCNT)? & 0xFF;
 
         let mut driver = Self {
             uart,
@@ -112,8 +122,68 @@ where
             .to_u32(),
         )?;
 
-        log::info!("TMC2209 инициализирован (UART, STEP/DIR, ENABLE активен низким уровнем)");
+        // IFCNT увеличивается на каждую принятую драйвером запись — так
+        // проверяется, что записи действительно дошли (на них нет ответа).
+        let ifcnt_after = driver.uart.read_register(address::IFCNT)? & 0xFF;
+        let accepted = ifcnt_after.wrapping_sub(ifcnt_before) & 0xFF;
+        if accepted != INIT_WRITES {
+            return Err(AppError::motor_driver(
+                "tmc2209",
+                format!(
+                    "драйвер принял {accepted} из {INIT_WRITES} записей (IFCNT {ifcnt_before} -> {ifcnt_after})"
+                ),
+            ));
+        }
+
+        log::info!(
+            "TMC2209 инициализирован (адрес {}, UART, STEP/DIR, ENABLE активен низким уровнем)",
+            driver.uart.slave_address()
+        );
         Ok(driver)
+    }
+
+    /// Проверяет, что на линии отвечает именно TMC2209: читает `IOIN` по
+    /// заданному адресу, а если ответа нет — перебирает адреса `0..=3`
+    /// (распайка `MS1`/`MS2` могла отличаться от ожидаемой) и переключает
+    /// канал на найденный.
+    fn detect(uart: &mut Tmc2209Uart<'u>) -> AppResult<()> {
+        let configured = uart.slave_address();
+        let candidates = std::iter::once(configured).chain((0..=MAX_SLAVE_ADDRESS).filter(|&a| a != configured));
+
+        let mut last_error = None;
+        for candidate in candidates {
+            uart.set_slave_address(candidate);
+            match uart.read_register(address::IOIN) {
+                Ok(ioin) => {
+                    let version = (ioin >> 24) as u8;
+                    if version != TMC2209_VERSION {
+                        return Err(AppError::motor_driver(
+                            "tmc2209",
+                            format!("по адресу {candidate} ответил чип с VERSION={version:#04x}, ожидался {TMC2209_VERSION:#04x}"),
+                        ));
+                    }
+                    if candidate != configured {
+                        log::warn!(
+                            "TMC2209 найден по адресу {candidate}, а не {configured}: проверьте распайку MS1/MS2"
+                        );
+                    }
+                    return Ok(());
+                }
+                Err(e) => last_error = Some(e),
+            }
+        }
+
+        uart.set_slave_address(configured);
+        Err(AppError::motor_driver(
+            "tmc2209",
+            format!(
+                "драйвер не отвечает по UART ни по одному адресу 0..=3 ({}). Проверьте: \
+                 питание моторов VM подано (без него UART TMC2209 молчит); TX подключён \
+                 к PDN_UART через резистор ~1 кОм, RX — напрямую; на модуле замкнута \
+                 перемычка PDN/UART; GND платы и драйвера общий",
+                last_error.map_or_else(String::new, |e| e.to_string())
+            ),
+        ))
     }
 
     /// Устанавливает разрешение микрошага (регистр `CHOPCONF.MRES`).
